@@ -1,5 +1,6 @@
 import sympy 
 import numpy as np 
+EPS = 1e-10 
 
 global_varnames = [] 
 def SVGen(): # slack vaname generator 
@@ -23,6 +24,8 @@ class Op:
             self.num = Ops[op] 
         else: 
             raise ValueError("op must be int or str! Got "+str(op))
+        if self.num < -1 or self.num > 1: 
+            raise ValueError("< or > OPS are currently not allowed")
     
     def __eq__(self, op2): 
         if (isinstance(op2, Op)): 
@@ -70,7 +73,9 @@ class LinIneq: # linear only
             return [coefs[v] for v in varnames], coefs[1] 
         return [coefs[v] for v in varnames] 
     # did not negate the const, so it's all just one side only 
-        
+
+    def __str__(self):
+        return "<LinIneq: {} {} {}>".format(self.lhs, self.op.sym, self.rhs)  
 
 
 class Linear: 
@@ -126,7 +131,8 @@ class Linear:
         self.A = self.A[inds] 
         self.b = self.b[inds]
 
-    def get_bfs0(self): 
+    def get_bfs0(self, aux_print_every_new_bfs=True, aux_print_every_pivot_dirn=False):
+        '''
         # IMPLICIT CHOICE OF WHICH ROWS TO USE FOR BASIC FEASIBLE SOLUTION - FIRST ONES 
         _, col_inds = sympy.Matrix(self.A).rref() # get linearly independent columns
         col_inds = list(col_inds) 
@@ -140,6 +146,133 @@ class Linear:
         x[col_inds] = x_B
 
         return x, col_inds # basic feasible solution found
+        ''' # that was wrong.
+        #return np.array([0,0,0,20,20,20], dtype=np.float32), [3,4,5] 
+
+        # we shall create a different easy-to-solve problem. 
+        A = np.concatenate([self.A, np.eye(self.A.shape[0])], axis=1) 
+        x0 = np.concatenate([np.zeros(self.A.shape[1]), self.b.copy()]) # this is a basic feasible solution 
+        inds0 = [i for i in range(self.A.shape[1], A.shape[1])] 
+        costvec = x0.copy() 
+
+        print("FINDING BFS0") 
+
+        lin = self # so that it can be copy-pasted 
+
+        while True: # while haven't found solution yet
+
+            # calculate change in cost for each direction
+            final_dcost, final_inidx, final_outidx, final_dx = None, None, None, None 
+            for dirn_no in range(len(lin.varnames)):
+                if dirn_no in inds0: continue # don't choose already done ones
+                # now, we've chosen to move in this direction - which means go let this =0 thing become not 0
+                # we'll be going in the direction until smtg else becomes 0 (or if it goes to infinity then min cost is -inf)
+                # if we move in this direction, it causes an increase in Ax, so we need to change the rest to compensate.
+                # If we just move until x_dirn_no becomes 1, we get delta b:
+                db = A[:, dirn_no]
+                # so, we need to find drest(m,1) which represents how much change in each in each column with index in inds0
+                # such that it ends up with -db, to counteract this change.
+                # basis(m,m) @ drest(m,1) = -db
+                # drest(m, 1) = basis^-1(m,m) @ (-db) = -basis^-1(m,m) @ db
+                # represent basis with B.
+                B = A[:,inds0]
+                drest = - np.linalg.inv(B) @ db
+                # we only need to consider drest < 0
+                # NOTE TO SELF: if i decide to consider all again, remember the corner case
+                # about x0[inds0][?]=0 but drest>0 so it's actually inf, but it's 0 in the dist calculation
+
+                dists = np.where(drest<0, x0[inds0] / -drest, np.Inf)
+                awayidx = np.argmin(dists) 
+                
+
+                if dists[awayidx] == np.Inf:
+                    # that means that cost can be negative infinity
+                    print("COST OF AUXILIARY CAN BE NEGATIVE INFINITY!!")
+                    1/0 # TODO
+
+                #print("DISTS:", dists) 
+
+
+                # get change in cost after moving - increase db component and drest component 
+                # (dists[awayidx] * (db+)
+                dx = np.zeros_like(A[0])
+                dx[inds0] = dists[awayidx] * drest
+                dx[dirn_no] = dists[awayidx] # * 1 
+                dcost = np.dot( costvec , dx )
+
+                if aux_print_every_pivot_dirn: 
+                    # debug 
+                    print("PIVOT DIRN", dirn_no)
+                    print("DX:", dx)
+                    print("DCOST:", dcost)
+                    print("DISTS:", dists)
+                    print("DREST:", drest)
+                    print() 
+
+                # check to make sure the >=0 constraints will still be fulfilled 
+
+                # if cost ~doesnt increase~ stricly decreases
+                # what about basis changes? 
+                if dcost < -EPS: #= EPS:
+                    # convert awayidx to the normal x coordinates
+                    away_idx = inds0[awayidx]
+                    final_dcost = dcost
+                    final_inidx = dirn_no
+                    final_outidx = away_idx
+                    final_dx = dx
+                    break # found this, since it's lowest index, take it 
+                
+                    #dcosts[dcost] = (dirn_no, away_idx, dx) # save this direction 
+
+            if final_dcost is None: 
+                # optimal already, at a local (global) minimum
+                print("OPTIMIZED AUXILIARY")
+                print("X0", x0)
+                print("INDS0", inds0)
+
+                c = np.dot(costvec, x0) 
+                if abs(c) > EPS:
+                    print("NOT A BFS! COST IS STILL", c) 
+                    1/0
+
+                # prep inds0: remove 0s that linger
+                zeros = [] 
+                for i in range(len(x0)):
+                    if abs(x0[i]) < EPS:
+                        zeros.append(i)
+                alr_replaced_cnt = 0 
+                for i in range(len(inds0)):
+                    if abs(x0[inds0[i]]) < EPS:
+                        inds0[i] = zeros[alr_replaced_cnt]
+                        alr_replaced_cnt += 1
+                # just verify
+                if (2*alr_replaced_cnt > len(zeros)):
+                    print("IT SEEMS THERE'S LESS ZEROS THAN REALLY?")
+                    print("new X0:", x0)
+                    print("new INDS0", inds0)
+                    1/0 
+
+                print()
+                print() 
+                # return the bfs relevant
+                return x0[:self.A.shape[1]], inds0 
+
+            # replace
+            outidx_idx = inds0.index(final_outidx)
+            inds0[outidx_idx] = final_inidx
+            x0 += final_dx
+
+            # should be done. Can wait for next loop 
+            if aux_print_every_new_bfs:
+                print("LOOP DONE! NEW VALUES:")
+                print("X0", x0)
+                print("INDS0", inds0)
+                print("COST", np.dot(costvec, x0))
+                #print(lin.b) 
+                print()
+            
+
+
 
     def x_to_subsdict(self, x):
         sd = {} 
@@ -150,35 +283,32 @@ class Linear:
     # let there be n linearly independent rows, m columns. 
 
 if __name__=='__main__':
-    varname_syms = sympy.symbols("x1:6") 
+    print_every_pivot_dirn = False
+    print_every_new_bfs = True 
+    varname_syms = sympy.symbols("x1:4") 
 
     for v in varname_syms:
         global_varnames.append(v)
     
-    cond1lhs = sympy.sympify("x1 + x2 + 2*x3 + x4")
-    cond1rhs = sympy.sympify("1")
-    cond1 = LinIneq(cond1lhs, Op('>='), cond1rhs)
+    cond1lhs = sympy.sympify("x1 + 2*x2 + 2*x3")
+    cond1rhs = sympy.sympify("20")
+    cond1 = LinIneq(cond1lhs, Op('<='), cond1rhs)
 
-    cond2lhs = sympy.sympify('3*x1 + x2 - x5')
-    cond2rhs = sympy.sympify('3')
-    cond2 = LinIneq(cond2lhs, Op('='), cond2rhs)
+    cond2lhs = sympy.sympify('2*x1 + x2 + 2*x3')
+    cond2rhs = sympy.sympify('20')
+    cond2 = LinIneq(cond2lhs, Op('<='), cond2rhs)
 
-    cond3lhs = sympy.sympify("x2 + x4 + 5*x5")
-    cond3rhs = sympy.sympify("-3 + x1")
+    cond3lhs = sympy.sympify("2*x1 + 2*x2 + x3")
+    cond3rhs = sympy.sympify("20")
     cond3 = LinIneq(cond3lhs, Op('<='), cond3rhs)
 
-    cond4lhs = sympy.sympify('x1 + 2*x3 - 5*x5')
-    cond4rhs = sympy.sympify('5')
-    cond4 = LinIneq(cond4lhs, Op('>='), cond4rhs)
-
-    cost = sympy.sympify('x1 + x2 + x3 + x4 + x5') # NOTE: if updating, update costvec too 
+    cost = sympy.sympify('-10*x1 - 12*x2 - 12*x3') # NOTE: if updating, update costvec too 
 
     lin = Linear()
     lin.add_vars(varname_syms) 
     lin.add_constraint(cond1, svgen=global_svgen)
     lin.add_constraint(cond2, svgen=global_svgen)
     lin.add_constraint(cond3, svgen=global_svgen)
-    lin.add_constraint(cond4, svgen=global_svgen)
 
     for v in varname_syms:
         lin.gez.append(v) 
@@ -188,7 +318,7 @@ if __name__=='__main__':
     lin.clean_Ab()
 
     # make cost evaluator vector 
-    costvec = np.array([1 if i<5 else 0 for i in range(len(lin.varnames))], dtype=np.float32) 
+    costvec = np.array([-10, -12, -12, 0, 0, 0], dtype=np.float32) 
 
     # start solving - get first BFS 
     x0, inds0 = lin.get_bfs0()
@@ -201,10 +331,11 @@ if __name__=='__main__':
     print() 
     
 
-    while True: # while haven't found solution yet 
+    while True: # while haven't found solution yet
+    #for _ in range(2): 
 
         # calculate change in cost for each direction
-        dcosts = {} # dcost: (in num, out num, new x)
+        final_dcost, final_inidx, final_outidx, final_dx = None, None, None, None 
         for dirn_no in range(len(lin.varnames)):
             if dirn_no in inds0: continue # don't choose already done ones
             # now, we've chosen to move in this direction - which means go let this =0 thing become not 0
@@ -217,51 +348,70 @@ if __name__=='__main__':
             # basis(m,m) @ drest(m,1) = -db
             # drest(m, 1) = basis^-1(m,m) @ (-db) = -basis^-1(m,m) @ db
             # represent basis with B.
-            B = lin.A[inds0]
+            B = lin.A[:,inds0]
             drest = - np.linalg.inv(B) @ db
+            # we only need to consider drest < 0
+            # NOTE TO SELF: if i decide to consider all again, remember the corner case
+            # about x0[inds0][?]=0 but drest>0 so it's actually inf, but it's 0 in the dist calculation
 
-            # find out which ones are first to reach end. x_i/-drest_i is smallest 
-            dists = x0 / -drest # get smallest nonnegatives value 
-            awayidx = np.argmin(np.where(dists>0, dists, np.Inf)) # hope that floating point errors can be ignored, so it will be min index and there's no looping
-            # if there is looping, degenerate cases, then use lexicograpic or something TODO
+            dists = np.where(drest<0, x0[inds0] / -drest, np.Inf)
+            awayidx = np.argmin(dists) 
+            
 
             if dists[awayidx] == np.Inf:
                 # that means that cost can be negative infinity
                 print("COST CAN BE NEGATIVE INFINITY!!")
-                1/0 # TODO 
+                1/0 # TODO
+
+            #print("DISTS:", dists) 
 
 
             # get change in cost after moving - increase db component and drest component 
             # (dists[awayidx] * (db+)
-            dx = np.zeros_like(self.A[0])
+            dx = np.zeros_like(lin.A[0])
             dx[inds0] = dists[awayidx] * drest
             dx[dirn_no] = dists[awayidx] # * 1 
             dcost = np.dot( costvec , dx )
 
-            # if cost reduces
-            if dcost < 0:
-                # convert awayidx to the normal x coordinates
-                away_idx = inds0[awayidx] 
-                dcosts[dcost] = (dirn_no, away_idx, dx) # save this direction 
+            if print_every_pivot_dirn: 
+                # debug 
+                print("PIVOT DIRN", dirn_no)
+                print("DX:", dx)
+                print("DCOST:", dcost)
+                print("DISTS:", dists)
+                print("DREST:", drest)
+                print() 
 
-        dcs = dcosts.keys() 
-        if len(dcs) == 0:
+            # check to make sure the >=0 constraints will still be fulfilled 
+
+            # if cost ~doesnt increase~ stricly decreases
+            # what about basis changes? 
+            if dcost < -EPS: #= EPS:
+                # convert awayidx to the normal x coordinates
+                away_idx = inds0[awayidx]
+                final_dcost = dcost
+                final_inidx = dirn_no
+                final_outidx = away_idx
+                final_dx = dx
+                break # found this, since it's lowest index, take it 
+            
+                #dcosts[dcost] = (dirn_no, away_idx, dx) # save this direction 
+
+        if final_dcost is None: 
             # optimal already, at a local (global) minimum
             print("OPTIMIZED YAY")
             1/0
 
-        # get min
-        mindc = min(dcs)
-        inidx, outidx, dx = dcosts[mindc]
-
         # replace
-        outidx_idx = inds0.index(outidx)
-        inds0[outidx_idx] = inidx
-        x0 += dx
+        outidx_idx = inds0.index(final_outidx)
+        inds0[outidx_idx] = final_inidx
+        x0 += final_dx
 
         # should be done. Can wait for next loop 
-        print("LOOP DONE! NEW VALUES:")
-        print("X0", x0)
-        print("INDS0", inds0)
-        print("COST", np.dot(costvec, x0))
-        print() 
+        if print_every_new_bfs:
+            print("LOOP DONE! NEW VALUES:")
+            print("X0", x0)
+            print("INDS0", inds0)
+            print("COST", np.dot(costvec, x0))
+            print()
+        
