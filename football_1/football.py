@@ -7,7 +7,8 @@ from linopt import Ops, Op, LinIneq, Linear, global_svgen, global_varnames
 
 if __name__=='__main__':
     print_every_pivot_dirn = False
-    print_every_new_bfs = True 
+    print_every_new_bfs = False 
+    print_normal = False 
 
     # x_{}{}{}o must be defined in other way 
     def get_overall(team, role, num): 
@@ -136,9 +137,9 @@ if __name__=='__main__':
 
     avg_defender_mul= ((1/10)*0 + (3/10)*0.25 + (6/10)*0.5) 
 
-    scoreA = (0.8*shootingA - 0.05*gkA - avg_defender_mul*avgdefB) * (0.7 * avgoverallA) 
+    scoreA = (0.8*shootingA/100 - 0.05*gkA/100 - avg_defender_mul*avgdefB/100) * (0.7 * avgoverallA) 
     scoreA = scoreA.expand() 
-    scoreB = (0.8*shootingB - 0.05*gkB - avg_defender_mul*avgdefA) * (0.7 * avgoverallB) 
+    scoreB = (0.8*shootingB/100 - 0.05*gkB/100 - avg_defender_mul*avgdefA/100) * (0.7 * avgoverallB)/100 
     scoreB = scoreB.expand() 
 
     scoreconds = [LinIneq(scoreA, Op('='), sympy.Symbol('Ascore')), 
@@ -194,15 +195,18 @@ if __name__=='__main__':
 
 
         # start solving - get first BFS 
-        x0, inds0 = lin.get_bfs0() 
+        x0, inds0 = lin.get_bfs0(aux_print_every_new_bfs=print_every_new_bfs, 
+                                 aux_print_normal = print_normal) 
         c0 = cost.subs(lin.x_to_subsdict(x0)) # we didn't actually use this oops
 
-        print("FIRST BFS FOUND! VALUES:")
-        print("X0", x0)
-        print("INDS0", inds0)
-        print("COST", np.dot(costvec, x0))
-        print() 
+        if print_normal: 
+            print("FIRST BFS FOUND! VALUES:")
+            print("X0", x0)
+            print("INDS0", inds0)
+            print("COST", np.dot(costvec, x0))
+            print() 
         
+        found = False 
 
         while True: # while haven't found solution yet
         #for _ in range(2): 
@@ -272,8 +276,21 @@ if __name__=='__main__':
 
             if final_dcost is None: 
                 # optimal already, at a local (global) minimum
-                print("OPTIMIZED YAY")
-                1/0
+                if print_normal: 
+                    print("OPTIMIZED YAY")
+
+                d = {}
+                         
+                for i in range(len(lin.varnames)):
+                    d[lin.varnames[i]] = x0[i]
+                    
+                for k in d.keys():
+                    if 'slack' in str(k): break
+                    print("{}: {}".format(k, round(d[k], 2)))
+                print('\n\n\n') 
+
+                found = True 
+                break 
 
             # replace
             outidx_idx = inds0.index(final_outidx)
@@ -287,4 +304,5 @@ if __name__=='__main__':
                 print("INDS0", inds0)
                 print("COST", np.dot(costvec, x0))
                 print()
+
             

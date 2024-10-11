@@ -131,7 +131,7 @@ class Linear:
         self.A = self.A[inds] 
         self.b = self.b[inds]
 
-    def get_bfs0(self, aux_print_every_new_bfs=True, aux_print_every_pivot_dirn=False):
+    def get_bfs0(self, aux_print_every_new_bfs=True, aux_print_every_pivot_dirn=False, aux_print_normal=True):
         '''
         # IMPLICIT CHOICE OF WHICH ROWS TO USE FOR BASIC FEASIBLE SOLUTION - FIRST ONES 
         _, col_inds = sympy.Matrix(self.A).rref() # get linearly independent columns
@@ -150,12 +150,13 @@ class Linear:
         #return np.array([0,0,0,20,20,20], dtype=np.float32), [3,4,5] 
 
         # we shall create a different easy-to-solve problem. 
-        A = np.concatenate([self.A, np.eye(self.A.shape[0])], axis=1) 
-        x0 = np.concatenate([np.zeros(self.A.shape[1]), self.b.copy()]) # this is a basic feasible solution 
+        A = np.concatenate([self.A, np.diag((2*((self.b>0) - 1/2)))], axis=1) # not np.eye but this because negatives if needed 
+        x0 = np.concatenate([np.zeros(self.A.shape[1]), abs(self.b.copy())]) # this is a basic feasible solution 
         inds0 = [i for i in range(self.A.shape[1], A.shape[1])] 
         costvec = x0.copy() 
 
-        print("FINDING BFS0") 
+        if aux_print_normal: 
+            print("FINDING BFS0") 
 
         lin = self # so that it can be copy-pasted 
 
@@ -226,9 +227,10 @@ class Linear:
 
             if final_dcost is None: 
                 # optimal already, at a local (global) minimum
-                print("OPTIMIZED AUXILIARY")
-                print("X0", x0)
-                print("INDS0", inds0)
+                if aux_print_normal: 
+                    print("OPTIMIZED AUXILIARY")
+                    print("X0", x0)
+                    print("INDS0", inds0)
 
                 c = np.dot(costvec, x0) 
                 if abs(c) > EPS:
@@ -252,8 +254,9 @@ class Linear:
                     print("new INDS0", inds0)
                     1/0 
 
-                print()
-                print() 
+                if aux_print_normal: 
+                    print()
+                    print() 
                 # return the bfs relevant
                 return x0[:self.A.shape[1]], inds0 
 
